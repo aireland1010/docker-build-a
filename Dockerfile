@@ -1,43 +1,19 @@
-# --- Stage 1: Build the Rust application ---
-FROM rust:1.75-bookworm AS builder
-
-# Set working directory
+# Use a standard build image, then extract binary for minimal runtime
+FROM rust:alpine AS builder
 WORKDIR /app
+COPY Cargo.toml ./
+COPY src ./src
 
-# Copy dependency files first (for layer caching)
-COPY Cargo.toml .
-COPY Cargo.lock .
+RUN --mount=type=cache,target=/root/.cargo REGISTRY=https://index.docker.io/v1/ cargo build --release --target x86_64-unknown-linux-musl
 
-# Install dependencies
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release
+FROM alpine:latest AS runtime
+WORKDIR /root/app
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/hello_world .
+ENV RUST_BACKTRACE=1
 
-# Copy source code
-COPY src/ ./src/
+RUN apk add ca-certificates && \
+    adduser -D -S -u 65532 nobody appuser && \
+    chown appuser:appuser /root/app/
 
-# Build again with all files present
-RUN cargo build --release
-
-# --- Stage 2: Final runtime image (minimal, no Rust toolchain) ---
-FROM debian:bookworm-slim
-
-# Install any system dependencies if needed
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# Copy built binary from builder stage
-COPY --from=builder /app/target/release/ ./target/release/
-
-# Set executable permission (if using a compiled binary)
-RUN chmod +x /app/target/release/*.bin \
-    || true  # Optional: adjust if your build outputs something else
-
-# Expose ports if your app needs them (not needed for CLI hello-world)
-EXPOSE 8080  # Example port if you add HTTP
-
-# Default command to run the application
-ENTRYPOINT ["/app/target/release/hello_world"]
-
-# Alternative: Run as a script or binary directly
-CMD ["./target/release/hello_world"]
+USER nobody
+CMD ["./hello_world"]
